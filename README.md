@@ -7,7 +7,7 @@ OpenFlow 1.0 controlado por POX hace de router con una IP pública compartida.
 de cada función es `raise NotImplementedError("TODO(Mx): ...")` y su docstring dice **qué hay que
 implementar**. Enunciado: [`docs/enunciado_TP2_NAT.pdf`](docs/enunciado_TP2_NAT.pdf).
 
-📐 **Leer primero:** [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md) (componentes, flujos, reglas
+**Leer primero:** [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md) (componentes, flujos, reglas
 OpenFlow, decisiones D1–D14, preguntas abiertas).
 
 ## Estructura
