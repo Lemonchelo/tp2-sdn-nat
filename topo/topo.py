@@ -15,6 +15,7 @@ Ejecución:  sudo python3 topo/topo.py [ruta/config.json]
 Hito: M1
 """
 
+import json
 import sys
 
 from mininet.cli import CLI
@@ -28,47 +29,61 @@ CONFIG_PATH = "config/network.json"
 
 
 def load_topology_config(path: str) -> dict:
-    """Lee el JSON y devuelve el dict completo (esta vez sí se usa la sección "topology").
-    Hito: M1"""
-    raise NotImplementedError("TODO(M1): load_topology_config")
+    """Lee el JSON y devuelve el dict completo (esta vez sí se usa la sección "topology")."""
+    with open(path) as f:
+        cfg = json.load(f)
+    if not cfg.get("topology", {}).get("private_hosts"):
+        raise ValueError(f"{path}: topology.private_hosts debe tener al menos un host")
+    return cfg
 
 
 class NATTopo(Topo):
     def build(self, cfg: dict):
-        """Construye la topología a partir de `cfg`.
+        """Construye la topología a partir de `cfg` (todo sale de config/network.json).
 
-        Qué implementar:
-          - s1 = addSwitch('s1') (OpenFlow 1.0; protocols='OpenFlow10' si hace falta).
-          - Host público (cfg["topology"]["public_host"]) con ip, mac y
-            defaultRoute 'via <IP pública del router>'. Enlazarlo a s1 FIJANDO el puerto del
-            switch: addLink(h_pub, s1, port2=cfg["router"]["public"]["port"]).
-          - Por cada host de cfg["topology"]["private_hosts"]: ip, mac y defaultRoute 'via <IP
-            privada del router>'; enlazarlo a s1 (los puertos se asignan después del público).
-          - La cantidad de hosts privados es la longitud de la lista (>= 2 para probar PAT).
-        Hito: M1
+        Los puertos del switch se fijan explícitamente: el público es router.public.port
+        y los privados toman los siguientes libres en orden de aparición en la lista.
         """
-        raise NotImplementedError("TODO(M1): NATTopo.build")
+        router = cfg["router"]
+        topo = cfg["topology"]
+        pub_port = router["public"]["port"]
+        pub_gw = router["public"]["ip"]
+        priv_gw = router["private"]["ip"]
+
+        s1 = self.addSwitch("s1")
+
+        pub = topo["public_host"]
+        h_pub = self.addHost(pub["name"], ip=pub["ip"], mac=pub["mac"],
+                             defaultRoute=f"via {pub_gw}")
+        self.addLink(h_pub, s1, port2=pub_port)
+
+        next_port = 1
+        for host in topo["private_hosts"]:
+            if next_port == pub_port:
+                next_port += 1
+            h = self.addHost(host["name"], ip=host["ip"], mac=host["mac"],
+                             defaultRoute=f"via {priv_gw}")
+            self.addLink(h, s1, port2=next_port)
+            next_port += 1
 
 
 def disable_ipv6(node) -> None:
-    """Deshabilita IPv6 en un nodo (igual que topo.py de la cátedra: tres sysctl
-    net.ipv6.conf.{all,default,lo}.disable_ipv6=1 vía node.cmd). Hito: M1"""
-    raise NotImplementedError("TODO(M1): disable_ipv6")
+    """Deshabilita IPv6 en un nodo (igual que el topo.py de la cátedra)."""
+    for scope in ("all", "default", "lo"):
+        node.cmd(f"sysctl -w net.ipv6.conf.{scope}.disable_ipv6=1")
 
 
 def run(config_path: str = CONFIG_PATH) -> None:
-    """Levanta la red y abre la CLI.
+    """Levanta la red y abre la CLI. NO configura ARP estático: lo resuelve el controlador."""
+    cfg = load_topology_config(config_path)
+    net = Mininet(topo=NATTopo(cfg=cfg), controller=RemoteController, link=TCLink)
+    net.start()
 
-    Qué implementar:
-      - cfg = load_topology_config(); net = Mininet(topo=NATTopo(cfg=cfg),
-        controller=RemoteController, link=TCLink); net.start().
-      - disable_ipv6() en todos los hosts y en s1.
-      - NO usar setARP(): el controlador debe resolver todo por ARP dinámico (requisito del TP).
-        Eliminar las entradas del topo.py original ("Entradas ARP para debug").
-      - CLI(net); net.stop().
-    Hito: M1
-    """
-    raise NotImplementedError("TODO(M1): run")
+    for node in net.hosts + net.switches:
+        disable_ipv6(node)
+
+    CLI(net)
+    net.stop()
 
 
 if __name__ == '__main__':
