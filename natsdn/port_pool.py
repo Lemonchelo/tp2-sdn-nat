@@ -8,7 +8,11 @@ Hito: M3
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
+
+
+log = logging.getLogger(__name__)
 
 
 class PortPool:
@@ -31,17 +35,37 @@ class PortPool:
 
         Hito: M3
         """
-        raise NotImplementedError("TODO(M3): PortPool.allocate")
+        used = self._in_use.setdefault(proto, set())
+        if preferred is not None and self.port_min <= preferred <= self.port_max and preferred not in used:
+            port = preferred
+        else:
+            size = self.port_max - self.port_min + 1
+            if len(used) >= size:
+                return None
+            start = self._next.get(proto, self.port_min)
+            for offset in range(size):
+                port = self.port_min + (start - self.port_min + offset) % size
+                if port not in used:
+                    break
+            else:
+                return None
+        used.add(port)
+        self._next[proto] = self.port_min if port == self.port_max else port + 1
+        return port
 
     def release(self, proto: int, port: int) -> None:
         """Libera `port` de `proto`. Liberar un puerto que no estaba ocupado no debe romper
         (loguear warning). Hito: M3"""
-        raise NotImplementedError("TODO(M3): PortPool.release")
+        used = self._in_use.get(proto)
+        if used is None or port not in used:
+            log.warning("Liberación de puerto no reservado: proto=%s port=%s", proto, port)
+            return
+        used.remove(port)
 
     def in_use(self, proto: int, port: int) -> bool:
         """True si el puerto está reservado. Hito: M3"""
-        raise NotImplementedError("TODO(M3): PortPool.in_use")
+        return port in self._in_use.get(proto, set())
 
     def available(self, proto: int) -> int:
         """Cantidad de puertos libres para `proto` (útil para logs y tests). Hito: M3"""
-        raise NotImplementedError("TODO(M3): PortPool.available")
+        return self.port_max - self.port_min + 1 - len(self._in_use.get(proto, set()))

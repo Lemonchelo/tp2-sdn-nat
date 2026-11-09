@@ -69,22 +69,38 @@ class NatTable:
 
         Hito: M3
         """
-        raise NotImplementedError("TODO(M3): NatTable.get_or_create_outbound")
+        key = (proto, priv_ip, priv_port, remote_ip, remote_port)
+        entry = self._by_outbound.get(key)
+        if entry is not None:
+            entry.last_seen = self.clock()
+            return entry
+        public_port = self.port_pool.allocate(proto, preferred=priv_port)
+        if public_port is None:
+            return None
+        now = self.clock()
+        entry = NatEntry(self._next_id, proto, priv_ip, priv_port, priv_switch_port,
+                         remote_ip, remote_port, public_port, now, now)
+        self._next_id += 1
+        self._by_outbound[key] = entry
+        self._by_inbound[(proto, public_port)] = entry
+        return entry
 
     def lookup_inbound(self, proto: int, public_port: int) -> Optional[NatEntry]:
         """Busca el entry correspondiente a un paquete que llega de la red pública
         (dst_port == public_port). None si no hay mapeo (tráfico no solicitado -> drop).
         Hito: M3"""
-        raise NotImplementedError("TODO(M3): NatTable.lookup_inbound")
+        return self._by_inbound.get((proto, public_port))
 
     def get_by_id(self, entry_id: int) -> Optional[NatEntry]:
         """Búsqueda por entry_id (lo usa el handler de FlowRemoved vía el cookie). Hito: M3"""
-        raise NotImplementedError("TODO(M3): NatTable.get_by_id")
+        return next((entry for entry in self._by_outbound.values()
+                     if entry.entry_id == entry_id), None)
 
     def mark_flow_installed(self, entry: NatEntry, direction: Direction) -> None:
         """Registra que el flujo `direction` de `entry` quedó instalado en el switch
         y refresca last_seen. Hito: M3"""
-        raise NotImplementedError("TODO(M3): NatTable.mark_flow_installed")
+        entry.flow_active[direction] = True
+        entry.last_seen = self.clock()
 
     def on_flow_removed(self, entry: NatEntry, direction: Direction) -> bool:
         """Registra que el switch removió el flujo `direction` (timeout o delete).
@@ -96,17 +112,32 @@ class NatTable:
         envía el cliente) el flujo entrante envejece pero la conexión sigue viva.
         Hito: M3
         """
-        raise NotImplementedError("TODO(M3): NatTable.on_flow_removed")
+        entry.flow_active[direction] = False
+        if any(entry.flow_active.values()):
+            return False
+        self.release(entry)
+        return True
 
     def release(self, entry: NatEntry) -> None:
         """Quita el entry de ambos índices y devuelve su puerto público a PortPool. Hito: M3"""
-        raise NotImplementedError("TODO(M3): NatTable.release")
+        key = (entry.proto, entry.priv_ip, entry.priv_port, entry.remote_ip, entry.remote_port)
+        # Un callback tardío de un entry liberado no debe borrar su reemplazo.
+        if self._by_outbound.get(key) is not entry:
+            return
+        del self._by_outbound[key]
+        del self._by_inbound[(entry.proto, entry.public_port)]
+        self.port_pool.release(entry.proto, entry.public_port)
 
     def expire_stale(self, max_age: float) -> list[NatEntry]:
         """Red de seguridad por si se perdió algún FlowRemoved: libera y devuelve los entries
         con (clock() - last_seen) > max_age. Se invoca periódicamente desde NatRouter. Hito: M3"""
-        raise NotImplementedError("TODO(M3): NatTable.expire_stale")
+        now = self.clock()
+        expired = [entry for entry in self._by_outbound.values()
+                   if now - entry.last_seen > max_age]
+        for entry in expired:
+            self.release(entry)
+        return expired
 
     def entries(self) -> Iterator[NatEntry]:
         """Itera los entries vivos (para el comando de debug/dump de la tabla). Hito: M3"""
-        raise NotImplementedError("TODO(M3): NatTable.entries")
+        return iter(self._by_outbound.values())
