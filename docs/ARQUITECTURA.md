@@ -24,7 +24,7 @@ flowchart LR
   end
   h2 --- pp; h3 --- pp; h4 --- pp
   pub --- h1
-  s1 <-. OpenFlow 1.0 .-> C[Controlador POX<br/>natsdn]
+  s1 <-. OpenFlow 1_0 .-> C[Controlador POX<br/>natsdn]
 ```
 
 ## 2. Componentes (paquete `natsdn/`)
@@ -67,7 +67,7 @@ sequenceDiagram
   Note over C: el SYN queda en cola pendiente
   H1->>S: ARP reply
   S->>C: PacketIn (ARP)
-  C->>C: aprende h1; completa la resolución pendiente
+  C->>C: aprende h1 - completa la resolución pendiente
   C->>S: FlowMod saliente + FlowMod entrante (SEND_FLOW_REM)
   C->>S: PacketOut del SYN con las mismas acciones
   S->>H1: SYN 200.0.0.254:49152 → 200.0.0.1:80 (MAC aa:aa:aa → h1)

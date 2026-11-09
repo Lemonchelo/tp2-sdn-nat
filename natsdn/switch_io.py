@@ -26,7 +26,11 @@ class SwitchIO:
 
         Hito: M2
         """
-        raise NotImplementedError("TODO(M2): SwitchIO.send_packet")
+        msg = of.ofp_packet_out()
+        msg.data = data
+        msg.in_port = in_port
+        msg.actions = list(actions)
+        self.connection.send(msg)
 
     def install_flow(self, match: of.ofp_match, actions: Sequence, idle_timeout: int,
                      priority: int, cookie: int = 0, send_flow_removed: bool = True,
@@ -47,3 +51,12 @@ class SwitchIO:
         Hito: M4
         """
         raise NotImplementedError("TODO(M4): SwitchIO.delete_flow")
+
+    @property
+    def physical_ports(self) -> list[int]:
+        """Devuelve los números de puertos físicos del switch."""
+        if not hasattr(self.connection, "ports"):
+            return []
+        # En OF 1.0, los puertos físicos tienen valores menores o iguales a OFPP_MAX (0xff00 = 65280)
+        return [port for port in self.connection.ports if port <= of.OFPP_MAX]
+

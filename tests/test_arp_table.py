@@ -10,7 +10,6 @@ from pox.lib.addresses import EthAddr, IPAddr
 
 from natsdn.arp_table import ArpTable
 
-pytestmark = pytest.mark.xfail(raises=NotImplementedError, reason="M2 pendiente")
 
 IP = IPAddr("192.168.1.2")
 MAC = EthAddr("00:00:00:00:00:02")

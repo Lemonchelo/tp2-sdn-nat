@@ -14,6 +14,7 @@ from typing import Callable, Optional
 
 from pox.lib.addresses import EthAddr, IPAddr
 
+from natsdn.log_utils import *
 
 @dataclass
 class ArpEntry:
@@ -32,31 +33,42 @@ class ArpTable:
         self._entries: dict[IPAddr, ArpEntry] = {}
 
     def learn(self, ip: IPAddr, mac: EthAddr, port: int) -> None:
-        """Inserta o refresca la entrada de `ip`.
-
-        Qué implementar: guardar/actualizar (mac, port, learned_at=clock()). Si la IP ya
-        existía con otra MAC o puerto, sobrescribir (el host pudo cambiar) y loguear el cambio.
-        Se llama al ver CUALQUIER ARP (request o reply) y no solo en las respuestas.
-
-        Hito: M2
         """
-        raise NotImplementedError("TODO(M2): ArpTable.learn")
+        Inserta o refresca la entrada de `ip`.
+        Si la IP existe con otra MAC o puerto se actualiza la entrada.
+        """
+        if ip in self._entries and (self._entries[ip].mac != mac or \
+           self._entries[ip].port != port):
+            log_color(YELLOW, f"IP=[{ip}] registrada con mac=[\
+                      {self._entries[ip].mac}] port=[{self._entries[ip].port}] \
+                      - se actualiza con mac=[{mac}] port=[{port}]")
+        self._entries[ip] = ArpEntry(ip=ip, mac=mac, port=port, learned_at=self.clock())
 
     def lookup(self, ip: IPAddr) -> Optional[ArpEntry]:
-        """Devuelve la entrada vigente de `ip` o None.
-
-        Qué implementar: si la entrada existe pero superó el TTL, eliminarla y devolver None.
-
-        Hito: M2
         """
-        raise NotImplementedError("TODO(M2): ArpTable.lookup")
+        Devuelve la entrada vigente de `ip` o None.
+        Borra la entrada si existiera pero superó el TTL y devuelve None
+        """
+        if not ip in self._entries:
+            return None
+        # existe.. validamos el TTL
+        if (self.clock() - self._entries[ip].learned_at) >= self.ttl:
+            # expiro borramos la entrada
+            del self._entries[ip]
+            return None
+        return self._entries[ip]
 
     def expire(self) -> int:
-        """Elimina todas las entradas vencidas y devuelve cuántas borró (para logging).
-
-        Hito: M2
         """
-        raise NotImplementedError("TODO(M2): ArpTable.expire")
+        Elimina todas las entradas vencidas y devuelve cuántas borró (para logging).
+        """
+        now = self.clock()
+        deleted = 0
+        for ip, arp_entry in list(self._entries.items()):
+            if (now - arp_entry.learned_at) >= self.ttl:
+                del self._entries[ip]
+                deleted+=1
+        return deleted
 
     def __len__(self) -> int:
         """Cantidad de entradas almacenadas (vencidas o no, no hace falta limpiar acá)."""
