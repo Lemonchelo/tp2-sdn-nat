@@ -40,14 +40,21 @@ class PortPool:
             port = preferred
         else:
             size = self.port_max - self.port_min + 1
+
             if len(used) >= size:
                 return None
+
             start = self._next.get(proto, self.port_min)
+            port = None
+
             for offset in range(size):
-                port = self.port_min + (start - self.port_min + offset) % size
-                if port not in used:
+                candidate = self.port_min + (start - self.port_min + offset) % size
+
+                if candidate not in used:
+                    port = candidate
                     break
-            else:
+
+            if port is None:
                 return None
         used.add(port)
         self._next[proto] = self.port_min if port == self.port_max else port + 1

@@ -93,8 +93,11 @@ class NatTable:
 
     def get_by_id(self, entry_id: int) -> Optional[NatEntry]:
         """Búsqueda por entry_id (lo usa el handler de FlowRemoved vía el cookie). Hito: M3"""
-        return next((entry for entry in self._by_outbound.values()
-                     if entry.entry_id == entry_id), None)
+        for entry in self._by_outbound.values():
+            if entry.entry_id == entry_id:
+                return entry
+
+        return None
 
     def mark_flow_installed(self, entry: NatEntry, direction: Direction) -> None:
         """Registra que el flujo `direction` de `entry` quedó instalado en el switch
@@ -132,8 +135,12 @@ class NatTable:
         """Red de seguridad por si se perdió algún FlowRemoved: libera y devuelve los entries
         con (clock() - last_seen) > max_age. Se invoca periódicamente desde NatRouter. Hito: M3"""
         now = self.clock()
-        expired = [entry for entry in self._by_outbound.values()
-                   if now - entry.last_seen > max_age]
+        expired = []
+
+        for entry in self._by_outbound.values():
+            if now - entry.last_seen > max_age:
+                expired.append(entry)
+
         for entry in expired:
             self.release(entry)
         return expired
