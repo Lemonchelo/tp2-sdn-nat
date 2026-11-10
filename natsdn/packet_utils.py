@@ -35,12 +35,10 @@ def extract_transport(ip_pkt: ipv4) -> Optional[TransportInfo]:
     # Caso de fragmento IP no inicial
     if ip_pkt.frag != 0:
         return None
-    # Caso udp
-    if isinstance(ip_pkt.payload, udp):
-        return TransportInfo(ipv4.UDP_PROTOCOL, ipv4.payload.srcport, ipv4.payload.payload.dstport)
-    # Caso tcp
-    if isinstance(ip_pkt.payload, tcp):
-        return TransportInfo(ipv4.TCP_PROTOCOL, ipv4.payload.srcport, ipv4.payload.payload.dstport)
+    payload = ip_pkt.payload
+    if isinstance(payload, (tcp, udp)) and payload.parsed:
+        proto = ipv4.TCP_PROTOCOL if isinstance(payload, tcp) else ipv4.UDP_PROTOCOL
+        return TransportInfo(proto, payload.srcport, payload.dstport)
     # Caso otro: ICMP
     return None
 
