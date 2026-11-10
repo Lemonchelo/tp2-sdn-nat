@@ -44,7 +44,7 @@ from natsdn.arp_handler import ArpHandler
 from natsdn.arp_table import ArpTable
 from natsdn.config import DEFAULT_CONFIG_PATH, NatConfig, load_config
 from natsdn.flow_installer import FlowInstaller
-from natsdn.log_utils import YELLOW, log_color
+from natsdn.log_utils import YELLOW, log, log_color
 from natsdn.nat_table import NatTable
 from natsdn.port_pool import PortPool
 from natsdn.switch_io import SwitchIO
@@ -83,7 +83,17 @@ class NatRouter:
           - Cualquier otro ethertype (LLDP, IPv6, ...): ignorar con log DEBUG.
         Hito: M4
         """
-        raise NotImplementedError("TODO(M4): NatRouter._handle_PacketIn")
+        packet = event.parsed
+        if not packet.parsed:
+            log.warning("Trama no parseada descartada en puerto %s", event.port)
+            return
+
+        if packet.type == ethernet.ARP_TYPE:
+            self.arp.handle_arp(packet, event.port)
+        elif packet.type == ethernet.IP_TYPE:
+            self.handle_ip(event)
+        else:
+            log.debug("Ethertype 0x%04x ignorado en puerto %s", packet.type, event.port)
 
     def _handle_FlowRemoved(self, event) -> None:
         """El switch avisa que expiró (o se borró) un flujo que instalamos con SEND_FLOW_REM.
@@ -109,20 +119,49 @@ class NatRouter:
         estuvieron esperando un ARP.
         Hito: M4
         """
-        raise NotImplementedError("TODO(M4): NatRouter.handle_ip")
+        packet = event.parsed
+        in_port = event.port
+        ip_pkt = packet.find("ipv4")
+        if ip_pkt is None or not ip_pkt.parsed:
+            log.warning("Paquete IPv4 ausente o no parseado descartado en puerto %s", in_port)
+            return
+
+        raw_data = event.ofp.data
+        packet_class = self.classify_ip(ip_pkt, in_port)
+        if packet_class == PacketClass.OUTBOUND:
+            self.handle_outbound(packet, in_port, raw_data)
+        elif packet_class == PacketClass.INBOUND:
+            self.handle_inbound(packet, in_port, raw_data)
+        elif packet_class == PacketClass.TO_ROUTER:
+            self.handle_to_router(packet, in_port, raw_data)
+        else:
+            log.debug("IPv4 %s -> %s descartado en puerto %s: OTHER",
+                      ip_pkt.srcip, ip_pkt.dstip, in_port)
 
     def classify_ip(self, ip_pkt: ipv4, in_port: int) -> PacketClass:
         """Clasifica un paquete IPv4.
 
         Reglas (en orden):
+          - in_port == cfg.public.port y dst == IP pública del router        -> INBOUND
           - dst es IP del router (cfg.is_router_ip)                          -> TO_ROUTER
           - in_port != cfg.public.port, src en subred privada y dst NO
             privada                                                          -> OUTBOUND
-          - in_port == cfg.public.port y dst == IP pública del router        -> INBOUND
           - cualquier otro caso (incluye privada->privada)                   -> OTHER
+
+        INBOUND tiene prioridad: las respuestas NAT también tienen como destino
+        una IP del router. La existencia del mapeo se valida en handle_inbound;
+        la subred pública de los destinos salientes, en handle_outbound.
         Hito: M4
         """
-        raise NotImplementedError("TODO(M4): NatRouter.classify_ip")
+        if in_port == self.cfg.public.port and ip_pkt.dstip == self.cfg.public.ip:
+            return PacketClass.INBOUND
+        if self.cfg.is_router_ip(ip_pkt.dstip):
+            return PacketClass.TO_ROUTER
+        if (in_port != self.cfg.public.port
+                and self.cfg.is_private_ip(ip_pkt.srcip)
+                and not self.cfg.is_private_ip(ip_pkt.dstip)):
+            return PacketClass.OUTBOUND
+        return PacketClass.OTHER
 
     def handle_outbound(self, packet: ethernet, in_port: int, raw_data: bytes) -> None:
         """Primer paquete (o paquete sin flujo) de una conexión privada -> pública.
