@@ -24,6 +24,7 @@ from typing import Sequence
 
 import pox.openflow.libopenflow_01 as of
 from pox.lib.addresses import EthAddr
+from pox.lib.packet.ethernet import ethernet
 
 from natsdn.config import NatConfig
 from natsdn.nat_table import Direction, NatEntry
@@ -41,12 +42,12 @@ class FlowInstaller:
     def make_cookie(entry_id: int, direction: Direction) -> int:
         """Codifica (entry_id, direction) en un entero de 64 bits. Ej.: (entry_id << 1) | direction.
         Hito: M4"""
-        raise NotImplementedError("TODO(M4): FlowInstaller.make_cookie")
+        return entry_id << 1 | int(direction)
 
     @staticmethod
     def parse_cookie(cookie: int) -> tuple[int, Direction]:
         """Inversa de make_cookie. Hito: M4"""
-        raise NotImplementedError("TODO(M4): FlowInstaller.parse_cookie")
+        return cookie >> 1 , Direction(cookie & 1)        
 
     # ---- matches y acciones ----------------------------------------------------------
 
@@ -54,18 +55,40 @@ class FlowInstaller:
         """Arma el ofp_match EXACTO del flujo `direction` de `entry` (ver tabla del docstring
         del módulo). Se usa tanto para instalar como para borrar (delete estricto).
         Hito: M4"""
-        raise NotImplementedError("TODO(M4): FlowInstaller.build_match")
+        #Saliente
+        if direction == Direction.OUTBOUND:
+            return of.ofp_match(in_port = entry.priv_switch_port,
+                                dl_type = ethernet.IP_TYPE, nw_proto = entry.proto,
+                                nw_src = entry.priv_ip, tp_src = entry.priv_port,
+                                nw_dst = entry.remote_ip, tp_dst = entry.remote_port)
+        #Entrante
+        return of.ofp_match(in_port = entry.public_port,
+                                dl_type = ethernet.IP_TYPE, nw_proto = entry.proto,
+                                nw_src = entry.remote_ip, tp_src = entry.remote_port,
+                                nw_dst = entry.public_ip, tp_dst = entry.public_port)
 
     def build_outbound_actions(self, entry: NatEntry, next_hop_mac: EthAddr) -> Sequence:
         """Lista ORDENADA de acciones del flujo saliente (reescritura de L2, L3, L4 y output).
         La MISMA lista se reutiliza en el packet_out del primer paquete, así el primer paquete
         sale traducido igual que los siguientes sin reescribirlo a mano.
         Hito: M4"""
-        raise NotImplementedError("TODO(M4): FlowInstaller.build_outbound_actions")
+        return [
+            of.ofp_action_dl_addr.set_src(self.cfg.public.mac),
+            of.ofp_action_dl_addr.set_dst(next_hop_mac),
+            of.ofp_action_nw_addr.set_src(self.cfg.public.ip),
+            of.ofp_action_tp_addr.set_src(entry.public_port),
+            of.ofp_action_output(port = self.cfg.public.port),
+        ]
 
     def build_inbound_actions(self, entry: NatEntry, priv_host_mac: EthAddr) -> Sequence:
         """Lista ordenada de acciones del flujo entrante. Hito: M4"""
-        raise NotImplementedError("TODO(M4): FlowInstaller.build_inbound_actions")
+        return [
+            of.ofp_action_dl_addr.set_src(self.cfg.private.mac),
+            of.ofp_action_dl_addr.set_dst(priv_host_mac),
+            of.ofp_action_nw_addr.set_src(entry.priv_ip),
+            of.ofp_action_tp_addr.set_src(entry.priv_port),
+            of.ofp_action_output(port = self.cfg.private.port),
+        ]
 
     # ---- instalación / borrado -------------------------------------------------------
 
@@ -73,16 +96,32 @@ class FlowInstaller:
         """Instala el flujo saliente (match + acciones + idle_timeout + cookie + SEND_FLOW_REM)
         y devuelve la lista de acciones usada (para el packet_out del primer paquete).
         Hito: M4"""
-        raise NotImplementedError("TODO(M4): FlowInstaller.install_outbound")
+        actions = self.build_outbound_actions(entry,next_hop_mac)
+        self.io.install_flow(self.build_match(entry,Direction.OUTBOUND),
+                             actions,
+                             idle_timeout = self.cfg.idle_timeout_for(entry.proto),
+                             priority = self.cfg.flow_priority,
+                             cookie = self.make_cookie(entry.entry_id, Direction.OUTBOUND))
+        return actions
 
     def install_inbound(self, entry: NatEntry, priv_host_mac: EthAddr) -> Sequence:
         """Instala el flujo entrante y devuelve las acciones usadas. Se instala junto con el
         saliente (para que la respuesta del servidor no pase por el controlador) y también
         cuando el flujo entrante expiró pero el mapeo sigue vivo.
         Hito: M4"""
-        raise NotImplementedError("TODO(M4): FlowInstaller.install_inbound")
+        actions = self.build_inbound_actions(entry,priv_host_mac)
+        self.io.install_flow(self.build_match(entry,Direction.INBOUND),
+                             actions,
+                             idle_timeout = self.cfg.idle_timeout_for(entry.proto),
+                             priority = self.cfg.flow_priority,
+                             cookie = self.make_cookie(entry.entry_id, Direction.INBOUND))
+        
+        return actions
+        
+
 
     def remove_flows(self, entry: NatEntry) -> None:
         """Borra del switch los flujos (ambas direcciones) de `entry`, con delete estricto
         sobre build_match(). Hito: M4"""
-        raise NotImplementedError("TODO(M4): FlowInstaller.remove_flows")
+        for d in (Direction.INBOUND, Direction.OUTBOUND):
+            self.io.delete_flow(self.build_match(entry,d), priority = self.cfg.flow_priority)

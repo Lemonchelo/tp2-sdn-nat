@@ -11,7 +11,8 @@ from pox.lib.addresses import EthAddr, IPAddr
 from pox.lib.packet.ethernet import ethernet, ETHER_BROADCAST
 from pox.lib.packet.ipv4 import ipv4
 from pox.lib.packet.arp import arp
-
+from pox.lib.packet.udp import udp
+from pox.lib.packet.tcp import tcp 
 
 class TransportInfo(NamedTuple):
     """Datos de capa 4 necesarios para identificar una conexión."""
@@ -31,7 +32,18 @@ def extract_transport(ip_pkt: ipv4) -> Optional[TransportInfo]:
 
     Hito: M4
     """
-    raise NotImplementedError("TODO(M4): extract_transport")
+    # Caso de fragmento IP no inicial
+    if ip_pkt.frag != 0:
+        return None
+    # Caso udp
+    if isinstance(ip_pkt.payload, udp):
+        return TransportInfo(ipv4.UDP_PROTOCOL, ipv4.payload.srcport, ipv4.payload.payload.dstport)
+    # Caso tcp
+    if isinstance(ip_pkt.payload, tcp):
+        return TransportInfo(ipv4.TCP_PROTOCOL, ipv4.payload.srcport, ipv4.payload.payload.dstport)
+    # Caso otro: ICMP
+    return None
+
 
 
 def build_arp_request(src_mac: EthAddr, src_ip: IPAddr, target_ip: IPAddr) -> ethernet:

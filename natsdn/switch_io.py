@@ -41,7 +41,19 @@ class SwitchIO:
         of.OFPFF_SEND_FLOW_REM (sin esto el controlador nunca se entera de las expiraciones).
         Hito: M4
         """
-        raise NotImplementedError("TODO(M4): SwitchIO.install_flow")
+        msg = of.ofp_flow_mod(command = of.OFPFC_ADD)
+        msg.match = match
+        msg.actions = actions
+        msg.idle_timeout = idle_timeout
+        msg.priority = priority
+        msg.cookie = cookie
+
+        if send_flow_removed: 
+            msg.flags |= of.OFPFF_SEND_REM
+
+        msg.hard_timeout = hard_timeout
+
+        self.connection.send(msg)
 
     def delete_flow(self, match: of.ofp_match, priority: Optional[int] = None) -> None:
         """Envía un ofp_flow_mod de borrado ESTRICTO (OFPFC_DELETE_STRICT) con ese match.
@@ -50,7 +62,13 @@ class SwitchIO:
         remove_flows() del FlowInstaller debe reconstruir los matches exactos.
         Hito: M4
         """
-        raise NotImplementedError("TODO(M4): SwitchIO.delete_flow")
+        msg = of.opf_flow_mod(command = of.OFPFC_DELETE_STRICT)
+        msg.match = match
+        if priority is not None:
+            msg.priority = priority
+
+        self.connection.send(msg)
+
 
     @property
     def physical_ports(self) -> list[int]:
