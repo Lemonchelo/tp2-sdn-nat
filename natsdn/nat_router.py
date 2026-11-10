@@ -45,7 +45,8 @@ from natsdn.arp_table import ArpTable
 from natsdn.config import DEFAULT_CONFIG_PATH, NatConfig, load_config
 from natsdn.flow_installer import FlowInstaller
 from natsdn.log_utils import YELLOW, log, log_color
-from natsdn.nat_table import NatTable
+from natsdn.nat_table import Direction, NatTable
+from natsdn.packet_utils import extract_transport
 from natsdn.port_pool import PortPool
 from natsdn.switch_io import SwitchIO
 
@@ -164,25 +165,78 @@ class NatRouter:
         return PacketClass.OTHER
 
     def handle_outbound(self, packet: ethernet, in_port: int, raw_data: bytes) -> None:
-        """Primer paquete (o paquete sin flujo) de una conexión privada -> pública.
+        """Traduce TCP/UDP hacia la subred pública; otros transportes se descartan.
 
-        Qué implementar:
-          1. info = extract_transport(ip_pkt). Si es None (ICMP u otro): handle_icmp() si está
-             implementado, sino drop + log.
-          2. Validar que ip_pkt.dstip esté en la subred pública (única red alcanzable en este
-             TP; sino drop + log).
-          3. entry = nat_table.get_or_create_outbound(...). Si None -> drop + log (pool agotado).
-          4. self.arp.resolve(dstip, cfg.public.port, on_resolved=..., on_failed=...). En
-             on_resolved(mac, port): flows.install_outbound(entry, mac) -> acciones;
-             nat_table.mark_flow_installed(); self.io.send_packet(raw_data, acciones, in_port)
-             para que el primer paquete salga ya traducido.
-          5. Instalar también el flujo entrante: la MAC y el puerto del host privado se
-             obtienen de la tabla ARP (se aprendieron cuando el host resolvió al gateway), con
-             flows.install_inbound(entry, priv_mac). Si no están (caso raro) -> arp.resolve().
-          6. on_failed: liberar el entry recién creado (nat_table.release) y loguear.
+        Resuelve ambas MAC antes de instalar los dos flujos y reenvía los bytes originales
+        con las acciones salientes. Cada continuación ARP valida la identidad del mapeo.
+        Un fallo cancela este paquete y libera solo su mapeo nuevo, aún sin flujos activos;
+        nunca elimina un mapeo previo o activado por otro paquete mientras esperaba ARP.
         Hito: M4
         """
-        raise NotImplementedError("TODO(M4): NatRouter.handle_outbound")
+        ip_pkt = packet.find("ipv4")
+        if ip_pkt is None or not ip_pkt.parsed:
+            log.warning("IPv4 saliente ausente o no parseado en puerto %s", in_port)
+            return
+        info = extract_transport(ip_pkt)
+        if info is None:
+            log.warning("Transporte saliente no soportado o no parseado: %s", ip_pkt.protocol)
+            return
+        if not self.cfg.is_public_ip(ip_pkt.dstip):
+            log.warning("Destino saliente fuera de la subred pública: %s", ip_pkt.dstip)
+            return
+
+        previous_ids = {entry.entry_id for entry in self.nat_table.entries()}
+        entry = self.nat_table.get_or_create_outbound(
+            info.proto, ip_pkt.srcip, info.src_port, in_port, ip_pkt.dstip, info.dst_port)
+        if entry is None:
+            log.warning("Pool NAT agotado para protocolo %s", info.proto)
+            return
+        created = entry.entry_id not in previous_ids
+        finished = False
+        public_resolved = False
+
+        def is_current():
+            return not finished and self.nat_table.get_by_id(entry.entry_id) is entry
+
+        def on_failed():
+            nonlocal finished
+            if finished:
+                return
+            finished = True
+            if (created and self.nat_table.get_by_id(entry.entry_id) is entry
+                    and not any(entry.flow_active.values())):
+                self.nat_table.release(entry)
+            log.warning("Resolución ARP saliente fallida para mapeo %s", entry.entry_id)
+
+        def on_public_resolved(public_mac, public_port):
+            nonlocal public_resolved
+            if not is_current() or public_resolved:
+                return
+            public_resolved = True
+
+            def on_private_resolved(private_mac, private_port):
+                nonlocal finished
+                if not is_current():
+                    return
+                if private_port != entry.priv_switch_port:
+                    on_failed()
+                    return
+                finished = True  # callbacks duplicados no instalan ni envían dos veces
+                actions = self.flows.install_outbound(entry, public_mac)
+                self.nat_table.mark_flow_installed(entry, Direction.OUTBOUND)
+                self.flows.install_inbound(entry, private_mac)
+                self.nat_table.mark_flow_installed(entry, Direction.INBOUND)
+                self.io.send_packet(raw_data, actions, in_port)
+
+            private_host = self.arp_table.lookup(entry.priv_ip)
+            if private_host is not None:
+                on_private_resolved(private_host.mac, private_host.port)
+            else:
+                self.arp.resolve(entry.priv_ip, in_port,
+                                 on_resolved=on_private_resolved, on_failed=on_failed)
+
+        self.arp.resolve(entry.remote_ip, self.cfg.public.port,
+                         on_resolved=on_public_resolved, on_failed=on_failed)
 
     def handle_inbound(self, packet: ethernet, in_port: int, raw_data: bytes) -> None:
         """Paquete desde la red pública hacia la IP pública del router SIN flujo instalado.
