@@ -62,10 +62,10 @@ class FlowInstaller:
                                 nw_src = entry.priv_ip, tp_src = entry.priv_port,
                                 nw_dst = entry.remote_ip, tp_dst = entry.remote_port)
         #Entrante
-        return of.ofp_match(in_port = entry.public_port,
+        return of.ofp_match(in_port = self.cfg.public.port,
                                 dl_type = ethernet.IP_TYPE, nw_proto = entry.proto,
                                 nw_src = entry.remote_ip, tp_src = entry.remote_port,
-                                nw_dst = entry.public_ip, tp_dst = entry.public_port)
+                                nw_dst = self.cfg.public.ip, tp_dst = entry.public_port)
 
     def build_outbound_actions(self, entry: NatEntry, next_hop_mac: EthAddr) -> Sequence:
         """Lista ORDENADA de acciones del flujo saliente (reescritura de L2, L3, L4 y output).
@@ -76,7 +76,7 @@ class FlowInstaller:
             of.ofp_action_dl_addr.set_src(self.cfg.public.mac),
             of.ofp_action_dl_addr.set_dst(next_hop_mac),
             of.ofp_action_nw_addr.set_src(self.cfg.public.ip),
-            of.ofp_action_tp_addr.set_src(entry.public_port),
+            of.ofp_action_tp_port.set_src(entry.public_port),
             of.ofp_action_output(port = self.cfg.public.port),
         ]
 
@@ -85,9 +85,9 @@ class FlowInstaller:
         return [
             of.ofp_action_dl_addr.set_src(self.cfg.private.mac),
             of.ofp_action_dl_addr.set_dst(priv_host_mac),
-            of.ofp_action_nw_addr.set_src(entry.priv_ip),
-            of.ofp_action_tp_addr.set_src(entry.priv_port),
-            of.ofp_action_output(port = self.cfg.private.port),
+            of.ofp_action_nw_addr.set_dst(entry.priv_ip),
+            of.ofp_action_tp_port.set_dst(entry.priv_port),
+            of.ofp_action_output(port = entry.priv_switch_port),
         ]
 
     # ---- instalación / borrado -------------------------------------------------------
