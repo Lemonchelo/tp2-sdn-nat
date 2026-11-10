@@ -49,7 +49,7 @@ class SwitchIO:
         msg.cookie = cookie
 
         if send_flow_removed: 
-            msg.flags |= of.OFPFF_SEND_REM
+            msg.flags |= of.OFPFF_SEND_FLOW_REM
 
         msg.hard_timeout = hard_timeout
 
@@ -62,7 +62,7 @@ class SwitchIO:
         remove_flows() del FlowInstaller debe reconstruir los matches exactos.
         Hito: M4
         """
-        msg = of.opf_flow_mod(command = of.OFPFC_DELETE_STRICT)
+        msg = of.ofp_flow_mod(command = of.OFPFC_DELETE_STRICT)
         msg.match = match
         if priority is not None:
             msg.priority = priority
