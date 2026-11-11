@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import enum
 
+import pox.openflow.libopenflow_01 as of
 from pox.core import core
 from pox.lib.packet.ethernet import ethernet
 from pox.lib.packet.ipv4 import ipv4
@@ -97,17 +98,25 @@ class NatRouter:
             log.debug("Ethertype 0x%04x ignorado en puerto %s", packet.type, event.port)
 
     def _handle_FlowRemoved(self, event) -> None:
-        """El switch avisa que expiró (o se borró) un flujo que instalamos con SEND_FLOW_REM.
+        """Registra expiraciones idle/hard sin reenviar ni reinstalar flujos.
 
-        Qué implementar:
-          - Descartar si event.ofp.reason no es de expiración por idle/hard timeout (si lo
-            borramos nosotros con remove_flows() ya actualizamos la tabla).
-          - FlowInstaller.parse_cookie(event.ofp.cookie) -> (entry_id, direction).
-          - NatTable.get_by_id() y NatTable.on_flow_removed(entry, direction).
-          - Loguear el estado (mapeo liberado / sigue vivo por el otro sentido).
+        Ignora borrados explícitos, otros motivos y cookies de mapeos ya liberados.
+        NatTable conserva el mapeo y su puerto mientras el otro sentido siga activo.
         Hito: M4
         """
-        raise NotImplementedError("TODO(M4): NatRouter._handle_FlowRemoved")
+        if event.ofp.reason not in (of.OFPRR_IDLE_TIMEOUT, of.OFPRR_HARD_TIMEOUT):
+            return
+
+        entry_id, direction = FlowInstaller.parse_cookie(event.ofp.cookie)
+        entry = self.nat_table.get_by_id(entry_id)
+        if entry is None:
+            log.debug("FlowRemoved ignorado: mapeo %s sentido %s desconocido o ya liberado",
+                      entry_id, direction.name)
+            return
+
+        released = self.nat_table.on_flow_removed(entry, direction)
+        log.info("FlowRemoved: mapeo %s sentido %s %s", entry_id, direction.name,
+                 "liberado" if released else "conservado (otro sentido activo)")
 
     # ---- IPv4 ------------------------------------------------------------------------
 
