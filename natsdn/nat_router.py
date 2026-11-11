@@ -239,20 +239,61 @@ class NatRouter:
                          on_resolved=on_public_resolved, on_failed=on_failed)
 
     def handle_inbound(self, packet: ethernet, in_port: int, raw_data: bytes) -> None:
-        """Paquete desde la red pública hacia la IP pública del router SIN flujo instalado.
+        """Reinstala solo el flujo entrante de un mapeo TCP/UDP existente.
 
-        Caso normal: el flujo entrante ya existe y este handler no corre. Llega acá cuando
-        (a) el flujo entrante expiró pero el mapeo sigue vivo, o (b) es tráfico no solicitado.
-
-        Qué implementar:
-          1. info = extract_transport(); entry = nat_table.lookup_inbound(info.proto, info.dst_port).
-          2. Si no hay entry, o el remote_ip/remote_port del paquete no coinciden con los del
-             entry -> drop + log (el NAT es saliente: no se aceptan conexiones entrantes nuevas).
-          3. arp.resolve(entry.priv_ip, ...) -> en on_resolved: flows.install_inbound(entry, mac),
-             nat_table.mark_flow_installed(), io.send_packet(raw_data, acciones, in_port).
+        Valida interfaz pública y origen remoto antes de resolver la MAC privada. Tras ARP,
+        comprueba identidad del mapeo y puerto privado, marca INBOUND activo y reenvía los
+        bytes originales con las mismas acciones. Cada invocación reenvía como máximo una
+        vez; un fallo cancela el paquete sin liberar el mapeo ni afectar el flujo saliente.
+        Tráfico no solicitado o no parseado se descarta con log, sin crear conexiones.
         Hito: M4
         """
-        raise NotImplementedError("TODO(M4): NatRouter.handle_inbound")
+        ip_pkt = packet.find("ipv4")
+        if ip_pkt is None or not ip_pkt.parsed:
+            log.warning("IPv4 entrante ausente o no parseado en puerto %s", in_port)
+            return
+        info = extract_transport(ip_pkt)
+        if info is None:
+            log.warning("Transporte entrante no soportado o no parseado: %s", ip_pkt.protocol)
+            return
+        if in_port != self.cfg.public.port or ip_pkt.dstip != self.cfg.public.ip:
+            log.warning("IPv4 entrante fuera de la interfaz pública en puerto %s", in_port)
+            return
+
+        entry = self.nat_table.lookup_inbound(info.proto, info.dst_port)
+        if entry is None:
+            log.warning("Tráfico entrante sin mapeo: protocolo %s, puerto %s",
+                        info.proto, info.dst_port)
+            return
+        if ip_pkt.srcip != entry.remote_ip or info.src_port != entry.remote_port:
+            log.warning("Origen entrante no coincide con mapeo %s", entry.entry_id)
+            return
+        finished = False
+
+        def is_current():
+            return not finished and self.nat_table.get_by_id(entry.entry_id) is entry
+
+        def on_failed():
+            nonlocal finished
+            if not is_current():
+                return
+            finished = True
+            log.warning("Resolución ARP entrante fallida para mapeo %s", entry.entry_id)
+
+        def on_resolved(private_mac, private_port):
+            nonlocal finished
+            if not is_current():
+                return
+            if private_port != entry.priv_switch_port:
+                on_failed()
+                return
+            finished = True  # callbacks duplicados no instalan ni envían dos veces
+            actions = self.flows.install_inbound(entry, private_mac)
+            self.nat_table.mark_flow_installed(entry, Direction.INBOUND)
+            self.io.send_packet(raw_data, actions, in_port)
+
+        self.arp.resolve(entry.priv_ip, entry.priv_switch_port,
+                         on_resolved=on_resolved, on_failed=on_failed)
 
     # ---- Opcionales (M5) --------------------------------------------------------------
 
