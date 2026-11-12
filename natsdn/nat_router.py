@@ -143,7 +143,8 @@ class NatRouter:
         elif packet_class == PacketClass.INBOUND:
             self.handle_inbound(packet, in_port, raw_data)
         elif packet_class == PacketClass.TO_ROUTER:
-            self.handle_to_router(packet, in_port, raw_data)
+            log.debug("IPv4 %s -> %s descartado en puerto %s: TO_ROUTER",
+                      ip_pkt.srcip, ip_pkt.dstip, in_port)
         else:
             log.debug("IPv4 %s -> %s descartado en puerto %s: OTHER",
                       ip_pkt.srcip, ip_pkt.dstip, in_port)

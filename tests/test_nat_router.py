@@ -98,7 +98,7 @@ def test_packet_in_dispatch(router, caplog, ethertype, parsed, expected):
 @pytest.mark.parametrize("src,dst,port,handler", [
     ("192.168.1.2", "200.0.0.1", 2, "handle_outbound"),
     ("200.0.0.1", "200.0.0.254", 1, "handle_inbound"),
-    ("192.168.1.2", "192.168.1.254", 2, "handle_to_router"),
+    ("192.168.1.2", "192.168.1.254", 2, None),
     ("192.168.1.2", "192.168.1.3", 2, None),
 ])
 @pytest.mark.parametrize("entrypoint", ["handle_ip", "_handle_PacketIn"])
@@ -130,9 +130,40 @@ def test_ipv4_dispatch(router, caplog, src, dst, port, handler, entrypoint):
     if handler is None:
         assert caplog.record_tuples == [(
             "natsdn", 10,
-            f"IPv4 {src} -> {dst} descartado en puerto {port}: OTHER",
+            f"IPv4 {src} -> {dst} descartado en puerto {port}: "
+            f"{'TO_ROUTER' if router.cfg.is_router_ip(IPAddr(dst)) else 'OTHER'}",
         )]
     router.connection.send.assert_not_called()
+
+
+@pytest.mark.parametrize("src,dst,port", [
+    ("192.168.1.2", "192.168.1.254", 2),
+    ("192.168.1.2", "200.0.0.254", 2),
+    ("200.0.0.1", "192.168.1.254", 1),
+])
+def test_packet_in_drops_to_router_without_side_effects(router, caplog, src, dst, port):
+    packet = ethernet(type=ethernet.IP_TYPE)
+    packet.parsed = True
+    packet.payload = ipv4(srcip=IPAddr(src), dstip=IPAddr(dst))
+    packet.payload.parsed = True
+    event = SimpleNamespace(parsed=packet, port=port,
+                            ofp=SimpleNamespace(data=b"to router"))
+    router.arp.resolve = Mock()
+    router.nat_table.get_or_create_outbound = Mock()
+    router.nat_table.lookup_inbound = Mock()
+
+    with caplog.at_level("DEBUG", logger="natsdn"):
+        assert router._handle_PacketIn(event) is None
+
+    assert caplog.record_tuples == [(
+        "natsdn", 10,
+        f"IPv4 {src} -> {dst} descartado en puerto {port}: TO_ROUTER",
+    )]
+    router.connection.send.assert_not_called()
+    router.arp.resolve.assert_not_called()
+    router.nat_table.get_or_create_outbound.assert_not_called()
+    router.nat_table.lookup_inbound.assert_not_called()
+    assert list(router.nat_table.entries()) == []
 
 
 @pytest.mark.parametrize("has_ipv4", [False, True])
